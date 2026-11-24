@@ -60,6 +60,9 @@ jobs:
         working-directory: repo
         run: |
           git config --global --add safe.directory "$PWD"
-          gh release create "$TAG-musl" /out/rustrak-*.tar.gz /out/SHA256SUMS --repo "$GITHUB_REPOSITORY" \
+          # Immutable releases (a setting of this repository): files cannot be added, replaced or deleted after publication,
+          # so the release is made as a draft, filled, and only then published.
+          gh release create "$TAG-musl" /out/rustrak-*.tar.gz /out/SHA256SUMS --repo "$GITHUB_REPOSITORY" --draft \
             --title "Rustrak $TAG for musl" \
             --notes "Built from https://github.com/rustrak/rustrak/commit/$COMMIT (tag $TAG), unmodified, with the upstream release profile on Alpine 3.24. Check SHA256SUMS."
+          gh release edit "$TAG-musl" --repo "$GITHUB_REPOSITORY" --draft=false
