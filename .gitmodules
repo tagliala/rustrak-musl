@@ -1,0 +1,3 @@
+[submodule "rustrak"]
+	path = rustrak
+	url = https://github.com/rustrak/rustrak.git

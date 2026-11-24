@@ -1,0 +1,64 @@
+name: Build Rustrak for musl
+
+# Run by hand. The source is the submodule `rustrak` (upstream rustrak/rustrak, pinned to one commit): to build another
+# version, move the submodule to that tag and commit it, then run this with the same tag. The run stops if the pinned
+# commit is not that tag. Nothing here changes Rustrak: it builds with the upstream release profile on Alpine (musl) and
+# publishes the binary and its SHA-256 as a release of this repository. No third-party action: only git, apk, rustup, gh.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Upstream tag the submodule is pinned to, for example v0.32.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    container:
+      image: alpine:3.24
+    env:
+      TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check the tag
+        run: |
+          case "$TAG" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "tag '$TAG' is not like v1.2.3" >&2; exit 1 ;; esac
+          case "$TAG" in *[!A-Za-z0-9.v-]*) echo "tag has odd characters" >&2; exit 1 ;; esac
+
+      - name: Tools
+        run: apk add --no-cache build-base git rustup file github-cli ca-certificates
+
+      - name: Source (this repository and the pinned submodule)
+        run: |
+          git clone --depth 1 "https://github.com/$GITHUB_REPOSITORY.git" repo
+          cd repo
+          git submodule update --init --depth 1 rustrak
+          pinned=$(git -C rustrak rev-parse HEAD)
+          wanted=$(git ls-remote https://github.com/rustrak/rustrak.git "refs/tags/$TAG^{}" "refs/tags/$TAG" | tail -1 | cut -f1)
+          [ -n "$wanted" ] || { echo "upstream has no tag $TAG" >&2; exit 1; }
+          [ "$pinned" = "$wanted" ] || { echo "the submodule is at $pinned, tag $TAG is $wanted" >&2; exit 1; }
+          echo "COMMIT=$pinned" >> "$GITHUB_ENV"
+
+      - name: Build (upstream release profile, musl)
+        working-directory: repo/rustrak/apps/server
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"/\1/p' ../../rust-toolchain.toml)
+          rustup-init -y --profile minimal --default-toolchain "$channel" --no-modify-path
+          . "$HOME/.cargo/env"
+          cargo build --release --locked
+          file target/release/rustrak | grep -Eq 'statically linked|static-pie linked'
+          mkdir -p /out
+          tar -czf "/out/rustrak-$TAG-x86_64-unknown-linux-musl.tar.gz" -C target/release rustrak
+          (cd /out && sha256sum rustrak-*.tar.gz > SHA256SUMS && cat SHA256SUMS)
+
+      - name: Publish
+        working-directory: repo
+        run: |
+          git config --global --add safe.directory "$PWD"
+          gh release create "$TAG-musl" /out/rustrak-*.tar.gz /out/SHA256SUMS --repo "$GITHUB_REPOSITORY" \
+            --title "Rustrak $TAG for musl" \
+            --notes "Built from https://github.com/rustrak/rustrak/commit/$COMMIT (tag $TAG), unmodified, with the upstream release profile on Alpine 3.24. Check SHA256SUMS."
